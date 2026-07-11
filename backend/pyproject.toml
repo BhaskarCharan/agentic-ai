@@ -20,6 +20,10 @@ dependencies = [
     "motor>=3.6.0",
     # --- Typed settings loaded from environment variables / .env file.
     "pydantic-settings>=2.6.0",
+    # --- LangSmith tracing client. Already a transitive dep of
+    # langchain-core; pinned explicitly since app/config.py now deliberately
+    # depends on its env-var-driven auto-tracing behavior.
+    "langsmith>=0.10.0",
 ]
 
 [dependency-groups]

@@ -56,27 +56,39 @@ class AgentService:
         key.
         """
         config = {"configurable": {"thread_id": thread_id}}
-        async for mode, event in self._graph.astream(
-            graph_input, config, stream_mode=["messages", "updates"]
-        ):
-            if mode == "messages":
-                message_chunk, _metadata = event
-                # `tools_node`'s ToolMessage also comes through the
-                # "messages" stream (as one complete message, not
-                # token-by-token) - skip it, callers should only ever see
-                # the AI's own words.
-                if isinstance(message_chunk, ToolMessage):
-                    continue
-                text = extract_text(message_chunk.content)
-                if text:
-                    yield ("token", {"content": text})
+        # Held in a variable (rather than iterated with a bare `async for`)
+        # so the `finally` block below can close it explicitly on the
+        # interrupt path. On an interrupt we stop consuming this generator
+        # before it reaches `END` - if we didn't close it ourselves here,
+        # Python would still close it eventually via GC, but only once this
+        # coroutine's frame is torn down, on a finalizer callback outside
+        # this call's tracing context. Closing it inline keeps that
+        # (harmless but noisy) `GeneratorExit` cleanup attributed to this
+        # same call instead of surfacing later, unattached, as what looks
+        # like a failed run in LangSmith.
+        graph_stream = self._graph.astream(graph_input, config, stream_mode=["messages", "updates"])
+        try:
+            async for mode, event in graph_stream:
+                if mode == "messages":
+                    message_chunk, _metadata = event
+                    # `tools_node`'s ToolMessage also comes through the
+                    # "messages" stream (as one complete message, not
+                    # token-by-token) - skip it, callers should only ever
+                    # see the AI's own words.
+                    if isinstance(message_chunk, ToolMessage):
+                        continue
+                    text = extract_text(message_chunk.content)
+                    if text:
+                        yield ("token", {"content": text})
 
-            elif mode == "updates" and "__interrupt__" in event:
-                pending = event["__interrupt__"][0]
-                yield ("interrupt", pending.value)
-                # The graph is now paused waiting on a resume - nothing more
-                # will come from this stream until that happens.
-                return
+                elif mode == "updates" and "__interrupt__" in event:
+                    pending = event["__interrupt__"][0]
+                    yield ("interrupt", pending.value)
+                    # The graph is now paused waiting on a resume - nothing
+                    # more will come from this stream until that happens.
+                    return
+        finally:
+            await graph_stream.aclose()
 
         yield ("done", {})
 

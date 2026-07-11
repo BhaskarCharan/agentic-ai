@@ -76,6 +76,27 @@ Open **http://localhost:4200** in your browser.
    there, loaded straight from MongoDB checkpoints (no separate "messages"
    table needed).
 
+## Optional: LangSmith tracing
+
+See every LLM call, tool call, and graph step (including paused
+`interrupt()`s) for a conversation in [smith.langchain.com](https://smith.langchain.com):
+
+1. Sign up at https://smith.langchain.com and grab an API key from
+   **Settings → API Keys**.
+2. In `backend/.env`, set:
+   ```
+   LANGSMITH_TRACING=true
+   LANGSMITH_API_KEY=<your key>
+   ```
+3. Restart the backend (`make dev`). No other code changes needed - tracing
+   is auto-instrumented deep inside LangChain/LangGraph, keyed off those env
+   vars alone (see `app/config.py`).
+4. Send a chat message, then check the `agentic-ai-chat` project in the
+   LangSmith UI - each `/chat` or `/resume` call shows up as one trace, with
+   the `agent`/`tools` node calls nested underneath.
+
+Off by default, so a fresh clone never sends data anywhere until you opt in.
+
 ## Troubleshooting
 
 - **`ng serve` complains about Node version**: run `nvm use 24` (or install

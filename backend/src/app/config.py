@@ -7,6 +7,7 @@ touching code. This is the ONLY place in the app that reads `os.environ`
 directly (via pydantic) - everything else imports `settings` from here.
 """
 
+import os
 from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -31,9 +32,39 @@ class Settings(BaseSettings):
     # is served from, e.g. "http://localhost:4200,https://myapp.com".
     cors_origins: str = "http://localhost:4200"
 
+    # --- LangSmith tracing (optional) ---
+    # Off by default - a demo/dev project shouldn't silently start shipping
+    # every conversation to a third-party service. Flip on in `.env`.
+    langsmith_tracing: bool = False
+    langsmith_api_key: str | None = None
+    langsmith_project: str = "agentic-ai-chat"
+    langsmith_endpoint: str = "https://api.smith.langchain.com"
+
     @property
     def cors_origins_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+
+
+def _export_langsmith_env(settings: Settings) -> None:
+    """Bridge our typed settings into the raw `os.environ` vars the
+    `langsmith`/`langchain-core` tracer actually reads.
+
+    LangSmith's tracing is auto-instrumented deep inside LangChain/LangGraph
+    (every LLM/tool call checks `os.environ` for `LANGSMITH_TRACING`, not
+    anything of ours) - there's no `enable_tracing()` call to make, no
+    callback to wire in. That means it's the one place in the app that
+    deliberately writes to `os.environ` rather than just reading from it:
+    `.env`/real env vars stay the single source of truth (so this doesn't
+    conflict with the module docstring's rule above), and this function is
+    just what makes a third-party library's own env-var lookup see them.
+    """
+    if not settings.langsmith_tracing:
+        return
+    os.environ["LANGSMITH_TRACING"] = "true"
+    os.environ["LANGSMITH_ENDPOINT"] = settings.langsmith_endpoint
+    os.environ["LANGSMITH_PROJECT"] = settings.langsmith_project
+    if settings.langsmith_api_key:
+        os.environ["LANGSMITH_API_KEY"] = settings.langsmith_api_key
 
 
 @lru_cache
@@ -51,3 +82,4 @@ def get_settings() -> Settings:
 # Convenience module-level instance for non-FastAPI code (e.g. the agent
 # graph, which is built once at import time, not per-request).
 settings = get_settings()
+_export_langsmith_env(settings)

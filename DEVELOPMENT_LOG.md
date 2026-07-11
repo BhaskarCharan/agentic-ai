@@ -108,10 +108,29 @@ README.md              - how to run it
   way as `SessionService`, via `get_graph` (reads `request.app.state.graph`
   - the one exception where a dependency factory needs the `Request`
   object) and `get_agent_service` in `api/dependencies.py`.
+- **How does LangSmith tracing turn on, and why does `config.py` write to
+  `os.environ` when its own docstring says it's the only reader?** LangSmith
+  tracing isn't a function you call - `langsmith`/`langchain-core` check
+  `os.environ` directly, deep inside every LLM/tool/graph invocation, for
+  `LANGSMITH_TRACING`/`LANGSMITH_API_KEY`/`LANGSMITH_PROJECT`/
+  `LANGSMITH_ENDPOINT` (confirmed by reading `langsmith/utils.py`'s
+  `tracing_is_enabled()` and `get_env_var()` in the installed package - it
+  checks `LANGSMITH_*` first, falls back to legacy `LANGCHAIN_*`). Since
+  pydantic-settings parses `.env` into its own `Settings` object without
+  ever touching the real process environment, those vars would never reach
+  the tracer if left purely as `Settings` fields. `config.py`'s
+  `_export_langsmith_env()` is the one deliberate exception: it still reads
+  the values the normal way (`.env` -> `Settings`), then re-exports them to
+  `os.environ` purely so a *third-party* library's own env-var lookup can
+  see them - `.env` stays the single source of truth, nothing else in the
+  app reads `os.environ` directly. Off by default
+  (`LANGSMITH_TRACING=false`) so a fresh clone never sends data anywhere
+  until someone opts in. See README.md's "Optional: LangSmith tracing"
+  section for the signup/setup steps.
 
 ## MongoDB collections
 
-Documented in detail with real field-level comments in `db_models.py`;
+Documented in detail with real field-level comments in `app/models/`;
 short version:
 
 - **`sessions`** (ours) - `{_id: thread_id, title, created_at, updated_at}`.
@@ -154,6 +173,29 @@ both `db.delete_session()` (removes the `sessions` doc) and
    `/chat` route - renames a session from the default title using the
    user's first message, exactly once (matched via `title ==
    DEFAULT_SESSION_TITLE` in the update filter).
+6. **`GeneratorExit` traceback appearing as an errored run in LangSmith on
+   the turn where a tool call needs approval** (the very first `/chat` in
+   this app's demo flow), while the following `/resume` traced fine. Root
+   cause: `AgentService._stream()` (see `services/agent_service.py`)
+   deliberately stops consuming `graph.astream(...)` early on an interrupt
+   (`yield ("interrupt", ...); return`) - the graph is paused, there's
+   nothing more to read until `/resume`. Before the fix, that early `return`
+   left the `astream()` async generator un-closed in the normal control
+   flow; Python still closes it eventually via garbage collection, but only
+   once this coroutine's frame is torn down later, throwing `GeneratorExit`
+   into `astream()`'s last `yield o` from an asyncio finalizer callback
+   *outside* the original call's context - which is what showed up
+   unattached, looking like a failed run. Fixed by holding the astream
+   generator in a variable and explicitly `await`ing `.aclose()` in a
+   `finally` block around the loop, so the close happens synchronously,
+   inline, attributed to the same call - same fix covers a client
+   disconnecting mid-stream, not just the interrupt path. Verified with a
+   standalone script driving a fake graph through `AgentService.start_turn`
+   and confirming events after the interrupt are never produced and no
+   warnings/exceptions leak once the caller stops iterating early.
+   Functionally nothing was broken either before or after (turn 2 always
+   worked) - this only changes *when and where* the generator's cleanup
+   happens, since where it happens is what a tracer attributes it to.
 
 ## Security note
 
@@ -177,12 +219,10 @@ real secrets in `.env.example`, commit messages, or this file.
   collections are opaque msgpack blobs by design - don't try to query into
   them from application code; go through the checkpointer's own API
   (`graph.aget_state()`, etc.) instead.
-- Stated learning goals for this project, not yet started: a multi-agent
+- Stated learning goal for this project, not yet started: a multi-agent
   setup (multiple LangGraph nodes/subgraphs or separate agents coordinating
-  on one task, not just the single `agent`/`tools` loop today) and
-  LangSmith tracing (`LANGCHAIN_TRACING_V2`/`LANGCHAIN_API_KEY` env vars -
-  `langsmith` is already a transitive dependency via LangGraph, nothing
-  wired up yet). The `models/` + `repositories/` + `services/` layering
-  introduced for `sessions` is meant to be the template once more
-  agents/collections show up - each new domain concept should get its own
-  trio of files rather than growing an existing one.
+  on one task, not just the single `agent`/`tools` loop today). The
+  `models/` + `repositories/` + `services/` layering introduced for
+  `sessions` is meant to be the template once more agents/collections show
+  up - each new domain concept should get its own trio of files rather than
+  growing an existing one.
