@@ -1,62 +1,17 @@
-"""
-Typed shapes for every document this app stores in MongoDB.
-
-There are three collections in the `agentic_ai_chat` database, owned by two
-different pieces of code:
-
-  * `sessions`           - owned by US (app/db.py). `SessionDocument` below
-                            is the real, enforced shape - db.py always reads
-                            and writes through it.
-  * `checkpoints`        - owned by LangGraph's `MongoDBSaver`
-                            (langgraph-checkpoint-mongodb). It writes these
-                            with its own internal (de)serializer; our code
-                            never constructs or parses these documents
-                            directly, so the two classes below are
-                            documentation of the shape, not something we
-                            import/use elsewhere.
-  * `checkpoint_writes`  - also owned by `MongoDBSaver`, same caveat.
-
-See `app/agent/graph.py` for where the checkpointer is built, and the
-docstring on each class below for what the collection is actually for.
+"""Reference only - the two collections LangGraph's `MongoDBSaver` owns and
+manages itself (`checkpoints`, `checkpoint_writes`). Our code never
+constructs or parses these documents directly; these classes just document
+the shape for whoever's reading the database. See `app/agent/graph.py` for
+where the checkpointer is built.
 """
 
-from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
-
-# --------------------------------------------------------------------------
-# Ours: sessions
-# --------------------------------------------------------------------------
-
-
-class SessionDocument(BaseModel):
-    """One document per conversation, in the `sessions` collection.
-
-    This is pure UI-facing metadata - it exists only so the frontend can
-    render a sidebar of past conversations without asking LangGraph "list
-    me every thread_id you know about" (which its checkpointer doesn't
-    support). The actual message content is never stored here; it lives in
-    `checkpoints`, keyed by this same id.
-    """
-
-    model_config = ConfigDict(populate_by_name=True)
-
-    # Doubles as the LangGraph `thread_id` - deleting a session by this id
-    # also means deleting the checkpoints filed under the same thread_id.
-    id: str = Field(alias="_id")
-    title: str
-    created_at: datetime
-    updated_at: datetime
-
-
-# --------------------------------------------------------------------------
-# LangGraph-owned: checkpoints
-# --------------------------------------------------------------------------
+from pydantic import BaseModel, Field
 
 
 class CheckpointDocument(BaseModel):
-    """Reference only - one full snapshot of graph state, in `checkpoints`.
+    """One full snapshot of graph state, in `checkpoints`.
 
     LangGraph models a graph run as a sequence of "super-steps" (one round
     of node execution). After each super-step, it writes one document here
@@ -102,13 +57,8 @@ class CheckpointDocument(BaseModel):
     metadata: bytes
 
 
-# --------------------------------------------------------------------------
-# LangGraph-owned: checkpoint_writes
-# --------------------------------------------------------------------------
-
-
 class CheckpointWriteDocument(BaseModel):
-    """Reference only - one pending write, in `checkpoint_writes`.
+    """One pending write, in `checkpoint_writes`.
 
     Where `checkpoints` holds a full consolidated snapshot per super-step,
     `checkpoint_writes` holds the *individual* writes each node produced

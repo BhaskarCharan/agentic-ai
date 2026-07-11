@@ -31,10 +31,15 @@ backend/
     agent/tools.py       - the multiply tool
     agent/llm.py          - swappable LLM factory
     agent/messages.py    - extract_text() - handles provider content-format quirks
-    api/chat.py           - SSE endpoints (/chat, /resume)
-    api/sessions.py       - session CRUD, history
-    db.py                  - Motor client + sessions collection helpers
-    db_models.py          - Pydantic models for all 3 Mongo collections (see below)
+    api/chat.py           - controller: SSE endpoints (/chat, /resume), formats SSE only
+    api/sessions.py       - controller: session CRUD, history
+    api/dependencies.py    - FastAPI Depends() wiring: database -> repository -> service
+    services/session_service.py       - business rules (default title, rename-once, ...)
+    services/agent_service.py          - all graph interaction (astream, interrupt/resume, aget_state, adelete_thread) - controllers never touch `graph` directly
+    repositories/session_repository.py - raw Mongo CRUD for the `sessions` collection
+    models/session.py                   - SessionDocument (ours)
+    models/checkpoint.py                 - CheckpointDocument/CheckpointWriteDocument (reference only)
+    db.py                  - Motor client + get_database() only, no collection code
     config.py              - pydantic-settings, reads .env
 frontend/
   src/app/
@@ -72,6 +77,37 @@ README.md              - how to run it
   `ToolMessage`) through the same channel. Checking the class directly
   side-steps any inconsistency in `.type` string values between message and
   chunk classes.
+- **Why split `sessions` code into `models/` + `repositories/` +
+  `services/` instead of one `db.py`?** `db.py` originally held Mongo
+  queries, business rules (default title, rename-once-on-first-message),
+  and the client setup all in one file. As more collections/agents get
+  added, that file would keep growing and mixing concerns. Now: `db.py` is
+  just the Motor client; `repositories/session_repository.py` is CRUD-only
+  (knows Mongo, not "what a default title is"); `services/session_service.py`
+  is business rules only (knows "what a default title is", not Mongo query
+  syntax); `api/dependencies.py` wires them together via FastAPI's
+  `Depends()` chain (`get_database -> get_session_repository ->
+  get_session_service`). Controllers (`api/sessions.py`, `api/chat.py`)
+  depend on `SessionService` only - this is the standard Repository +
+  Service Layer layering, and the DI wiring is what makes each layer
+  swappable/mockable later (e.g. a fake repository in a unit test, without
+  a real MongoDB).
+- **Why does `AgentService` exist separately from `SessionService`?** The
+  first pass of this refactor moved Mongo/`sessions` logic out of `db.py`
+  but left `api/chat.py` and `api/sessions.py` calling
+  `graph.astream(...)`, `graph.aget_state(...)`, and
+  `graph.checkpointer.adelete_thread(...)` directly - i.e. business logic
+  (how to drive the LangGraph graph) was still sitting in the controller
+  layer, just a different flavor of the same mistake `db.py` had. Moved
+  into `app/services/agent_service.py`: it owns everything LangGraph-shaped
+  (stream modes, `Command(resume=...)`, filtering `ToolMessage`, unpacking
+  `interrupt()` payloads) and exposes plain, transport-agnostic types -
+  `(event_type, payload)` tuples for streaming, `HistoryMessage` for
+  history. `api/chat.py` now only formats those events as SSE wire format;
+  it does not know what a `stream_mode` is. Wired into `Depends()` the same
+  way as `SessionService`, via `get_graph` (reads `request.app.state.graph`
+  - the one exception where a dependency factory needs the `Request`
+  object) and `get_agent_service` in `api/dependencies.py`.
 
 ## MongoDB collections
 
@@ -141,3 +177,12 @@ real secrets in `.env.example`, commit messages, or this file.
   collections are opaque msgpack blobs by design - don't try to query into
   them from application code; go through the checkpointer's own API
   (`graph.aget_state()`, etc.) instead.
+- Stated learning goals for this project, not yet started: a multi-agent
+  setup (multiple LangGraph nodes/subgraphs or separate agents coordinating
+  on one task, not just the single `agent`/`tools` loop today) and
+  LangSmith tracing (`LANGCHAIN_TRACING_V2`/`LANGCHAIN_API_KEY` env vars -
+  `langsmith` is already a transitive dependency via LangGraph, nothing
+  wired up yet). The `models/` + `repositories/` + `services/` layering
+  introduced for `sessions` is meant to be the template once more
+  agents/collections show up - each new domain concept should get its own
+  trio of files rather than growing an existing one.
