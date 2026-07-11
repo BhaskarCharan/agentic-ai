@@ -50,9 +50,9 @@ this roadmap.
    today.
    - Why this pattern and not `langgraph-supervisor` (the prebuilt package
      that does this exact thing): hand-roll it first, same reasoning as why
-     `graph.py` hand-rolls the agent/tools loop instead of using
-     `create_react_agent` - the point is learning the coordination
-     mechanics. `langgraph-supervisor` is a good thing to swap in *after*
+     `graph.py` hand-rolls the agent/tools loop instead of using a prebuilt
+     agent constructor - the point is learning the coordination mechanics.
+     `langgraph-supervisor` is a good thing to swap in *after*
      you've built one by hand and understand what it hides.
    - Why compound questions ("read mail AND weather") will just work with
      no extra plumbing: `tools_node` in `agent/graph.py` already loops over
@@ -154,6 +154,25 @@ UI) - that's plain Angular, no new libraries required.
 
 ## 3. Phase 0 - Weather agent (zero external accounts, build this first)
 
+**Status: done.** Implemented as described below, with two corrections
+worth knowing before starting Phase 2/3 (same shape will recur there):
+
+1. **Use `langchain.agents.create_agent`, not
+   `langgraph.prebuilt.create_react_agent`.** The latter is deprecated as of
+   LangGraph 1.0 (`langgraph==1.2.9` prints a live `LangGraphDeprecatedSinceV10`
+   warning on import) in favor of the former. Same call shape, different
+   import - `agent/weather_agent.py` uses `create_agent`.
+2. **`tools_node` in `graph.py` had to become `async def`, using `await
+   tool.ainvoke(...)` instead of the sync `tool.invoke(...)` it used before
+   this phase.** Reason: `weather_agent_tool` (and every future
+   specialist-agent wrapper tool - Gmail, LinkedIn) is necessarily `async
+   def`, since it awaits `some_agent.ainvoke(...)` internally; LangChain
+   raises `NotImplementedError` if you call `.invoke()` (sync) on an
+   async-only tool. `.ainvoke()` works for both sync and async tools, so
+   this was a safe blanket change, not a special case. See
+   `DEVELOPMENT_LOG.md`'s "Bugs hit and fixed" #7 for the full writeup -
+   **this fix is a prerequisite for Phase 2/3, not weather-specific.**
+
 **Goal:** prove the supervisor + specialist-agent-as-tool pattern end to
 end, with no OAuth/consent complexity in the way. This validates the
 architecture before Phase 1's real (and more fiddly) account-linking work.
@@ -174,7 +193,7 @@ curl "https://api.open-meteo.com/v1/forecast?latitude=17.398945&longitude=78.457
 ```
 backend/src/app/agent/
   weather_tools.py        - NEW: geocode() + get_current_weather() as @tool functions
-  weather_agent.py         - NEW: builds a small create_react_agent() bound to weather_tools
+  weather_agent.py         - NEW: builds a small create_agent() bound to weather_tools
   supervisor_tools.py       - NEW: wraps weather_agent as a callable tool for the supervisor
   graph.py                   - CHANGED: TOOLS list (or an equivalent for the supervisor) gains the new wrapper tool
 ```
@@ -228,15 +247,18 @@ async def get_current_weather(city: str) -> str:
 WEATHER_TOOLS = [get_current_weather]
 ```
 
-The specialist agent itself - this is the first place `create_react_agent`
-gets used in this codebase, deliberately (see decision #1 above for why now
-vs. earlier):
+The specialist agent itself - this is the first place a prebuilt agent
+constructor gets used in this codebase, deliberately (see decision #1 above
+for why now vs. earlier). **Use `langchain.agents.create_agent`, not
+`langgraph.prebuilt.create_react_agent`** - the latter is deprecated as of
+LangGraph 1.0 in this repo's installed version (see "Status: done" note
+above):
 
 ```python
 # agent/weather_agent.py
-"""The weather specialist - a small ReAct agent the supervisor calls as a tool."""
+"""The weather specialist - a small prebuilt agent the supervisor calls as a tool."""
 
-from langgraph.prebuilt import create_react_agent
+from langchain.agents import create_agent
 
 from app.agent.llm import get_llm
 from app.agent.weather_tools import WEATHER_TOOLS
@@ -244,7 +266,7 @@ from app.agent.weather_tools import WEATHER_TOOLS
 # No checkpointer here - this sub-agent's internal reasoning doesn't need
 # its own persisted history; only the top-level supervisor's conversation
 # does (via the existing MongoDBSaver in build_graph()).
-weather_agent = create_react_agent(get_llm(), WEATHER_TOOLS)
+weather_agent = create_agent(get_llm(), WEATHER_TOOLS, name="weather_agent")
 ```
 
 And the wrapper that makes it callable as one tool from the supervisor:
@@ -394,7 +416,7 @@ doesn't need to touch `sse.ts`/`chat.service.ts` at all.
 **Option A - Composio's Python SDK tool objects** (what `composio-langchain`
 is for): fetch ready-to-bind `BaseTool` objects for the Gmail toolkit,
 scoped to `settings.composio_user_id`, and bind them into a
-`create_react_agent()` the same way `weather_agent.py` does. This keeps
+`create_agent()` the same way `weather_agent.py` does. This keeps
 everything in the same SDK you're already using for connection management
 in Phase 1.
 
@@ -417,7 +439,7 @@ underway and the concept is familiar from the consumer side too.
 ```
 backend/src/app/agent/
   gmail_tools.py     - NEW: Composio-provided Gmail tools (read/search/summarize-relevant ones)
-  gmail_agent.py      - NEW: create_react_agent() bound to gmail_tools
+  gmail_agent.py      - NEW: create_agent() bound to gmail_tools
   supervisor_tools.py  - CHANGED: add gmail_agent_tool, same wrapper shape as weather_agent_tool
   graph.py               - CHANGED: bind gmail_agent_tool alongside the others
 ```
@@ -435,7 +457,7 @@ backend/src/app/agent/
 ## 6. Phase 3 - LinkedIn agent
 
 Same shape as Phase 2, second toolkit. By this point the pattern
-(Composio-connected toolkit -> `create_react_agent()` -> wrapper tool -> add
+(Composio-connected toolkit -> `create_agent()` -> wrapper tool -> add
 to supervisor's tool list) should be close to copy-paste, which is the
 payoff of doing Gmail first.
 
@@ -456,7 +478,22 @@ still produces one coherent final answer.
 ## 7. Phase 4 - Compound-question polish + selective interrupts
 
 Now that all three specialists exist, revisit the two things deliberately
-deferred earlier:
+deferred earlier.
+
+**Confirmed motivation (not hypothetical):** after Phase 0, a real compound
+question ("what's 6 times 7 and what's the weather in Hyderabad?") needed
+**two separate manual approve-clicks** across two `/resume` round trips
+before it finished, because `tools_node` loops `interrupt()` once per tool
+call in the `AIMessage`, and Gemini put both calls in one message. Each
+pause also shows as a `GeneratorExit`-flagged "error" in LangSmith (expected
+- see `DEVELOPMENT_LOG.md` bug #6's follow-up note - not something fixable
+from our side, since it's inherent to how the tracer treats an
+early-closed stream). Decided **not** to fix this by batching multiple
+pending tool calls into one `interrupt()` before Phase 4 - the selective-
+interrupt work below should shrink the problem naturally (most calls in a
+turn won't interrupt at all once only writes do), so try that first and
+only build batching on top if it's still not enough once Gmail/LinkedIn
+exist and turns can have 3 pending calls instead of 2.
 
 1. **Selective interrupts.** Add a small set in `agent/graph.py`:
    ```python
@@ -478,9 +515,11 @@ deferred earlier:
    answering multi-part questions completely - e.g. "If a user's message
    has multiple parts (e.g. asking about email and weather in the same
    message), address every part before giving your final answer."
-3. **Per-agent LangSmith run naming** - pass `name="weather_agent"` (etc.)
-   to each `create_react_agent()` call, so traces in LangSmith clearly show
-   which specialist handled which part of a compound request. Purely a
+3. **Per-agent LangSmith run naming** - pass `name=...` to each
+   `create_agent()` call, so traces in LangSmith clearly show which
+   specialist handled which part of a compound request. Already done for
+   `weather_agent` (`name="weather_agent"`); make sure Gmail/LinkedIn's
+   `create_agent()` calls in Phase 2/3 do the same. Purely a
    debugging/observability nicety, no behavior change.
 
 ---

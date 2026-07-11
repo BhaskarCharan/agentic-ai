@@ -37,18 +37,28 @@ from langgraph.prebuilt import tools_condition
 from langgraph.types import interrupt
 
 from app.agent.llm import get_llm
-from app.agent.tools import TOOLS
+from app.agent.supervisor_tools import SUPERVISOR_TOOLS
+from app.agent.tools import TOOLS as BASE_TOOLS
 from app.config import settings
+
+# Every tool the supervisor can call: plain tools (`multiply`) plus wrapper
+# tools that each delegate to a specialist sub-agent (`weather_agent_tool`,
+# and Gmail/LinkedIn ones as later phases add them). The supervisor treats
+# both kinds identically - it has no idea `weather_agent_tool` runs a whole
+# other agent underneath.
+ALL_TOOLS = [*BASE_TOOLS, *SUPERVISOR_TOOLS]
 
 # Map of tool name -> callable, so the "tools" node can look up the right
 # tool to invoke once the human has approved a pending call.
-_TOOLS_BY_NAME = {t.name: t for t in TOOLS}
+_TOOLS_BY_NAME = {t.name: t for t in ALL_TOOLS}
 
-# The LLM with `multiply` bound as a callable tool. Binding tools doesn't
-# execute anything - it just tells the model "here's a function you can ask
-# to have called, and here's its schema"; the model responds with a
-# tool_calls list on its AIMessage when it wants to use one.
-_llm_with_tools = get_llm().bind_tools(TOOLS)
+# The LLM with every tool above bound. Binding tools doesn't execute
+# anything - it just tells the model "here's a function you can ask to have
+# called, and here's its schema"; the model responds with a tool_calls list
+# on its AIMessage when it wants to use one (it can ask for more than one in
+# the same turn, e.g. a weather question and a multiply question together -
+# `tools_node` below already loops over every requested call).
+_llm_with_tools = get_llm().bind_tools(ALL_TOOLS)
 
 # Without this, some models (Gemini included) sometimes answer a tool
 # result with just the bare number ("400.0") instead of a sentence - because
@@ -57,10 +67,11 @@ _llm_with_tools = get_llm().bind_tools(TOOLS)
 # than part of the conversation.
 _SYSTEM_PROMPT = SystemMessage(
     content=(
-        "You are a helpful assistant with access to a `multiply` tool. "
-        "After a tool call returns a result, always reply with a complete, "
-        "friendly sentence stating the answer in context - never reply with "
-        "just the bare number on its own."
+        "You are a helpful assistant with access to a `multiply` tool and a "
+        "weather lookup tool. After a tool call returns a result, always "
+        "reply with a complete, friendly sentence stating the answer in "
+        "context - never reply with just the bare number or raw data on its "
+        "own."
     )
 )
 
@@ -71,7 +82,7 @@ def agent_node(state: MessagesState) -> dict:
     return {"messages": [response]}
 
 
-def tools_node(state: MessagesState) -> dict:
+async def tools_node(state: MessagesState) -> dict:
     """Confirm with the human, then execute (or skip) each requested tool call.
 
     NOTE on `interrupt()` semantics: when this node is resumed after a pause,
@@ -79,6 +90,14 @@ def tools_node(state: MessagesState) -> dict:
     that already has a resume value replays that value instantly instead of
     pausing again, so this loop safely "continues" past tool calls that were
     already confirmed earlier in the same node execution.
+
+    NOTE on `ainvoke` vs `invoke`: specialist-agent wrapper tools (e.g.
+    `weather_agent_tool` in `supervisor_tools.py`) are defined as `async
+    def`, which LangChain only allows calling via `.ainvoke()` - a sync
+    `.invoke()` on one raises `NotImplementedError`. `.ainvoke()` works for
+    both sync and async tools (it runs a sync tool's function in a thread
+    executor), so it's used unconditionally here rather than branching on
+    the tool's type.
     """
     last_message = state["messages"][-1]
     results: list[ToolMessage] = []
@@ -94,7 +113,7 @@ def tools_node(state: MessagesState) -> dict:
 
         if approved:
             tool = _TOOLS_BY_NAME[call["name"]]
-            output = tool.invoke(call["args"])
+            output = await tool.ainvoke(call["args"])
             content = str(output)
         else:
             content = f"The user declined to run `{call['name']}`."

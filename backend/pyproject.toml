@@ -9,13 +9,19 @@ dependencies = [
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.32.0",
     # --- Agent framework: builds the tool-calling graph, gives us
-    # checkpointing (persisted history) and interrupt/resume (human-in-the-loop) for free.
-    "langgraph>=0.2.60",
+    # checkpointing (persisted history) and interrupt/resume (human-in-the-loop)
+    # for free. Floor bumped to 1.x to match what's actually installed.
+    "langgraph>=1.2.0",
     # --- Persists LangGraph checkpoints (conversation state) straight into MongoDB.
     "langgraph-checkpoint-mongodb>=0.1.0",
     # --- LLM adapter: wraps the Gemini API behind LangChain's chat-model
     # interface so LangGraph can bind tools to it and stream tokens.
     "langchain-google-genai>=2.0.0",
+    # --- `create_agent`, used to build each specialist sub-agent (weather,
+    # and Gmail/LinkedIn in later phases) - was a transitive dep via
+    # langchain-google-genai, pinned explicitly now that we import from it
+    # directly in agent/weather_agent.py.
+    "langchain>=1.3.9",
     # --- Async MongoDB driver, used for our own "sessions" metadata collection.
     "motor>=3.6.0",
     # --- Typed settings loaded from environment variables / .env file.
@@ -24,6 +30,9 @@ dependencies = [
     # langchain-core; pinned explicitly since app/config.py now deliberately
     # depends on its env-var-driven auto-tracing behavior.
     "langsmith>=0.10.0",
+    # --- Async HTTP client. Used at runtime by the weather tool (Open-Meteo
+    # calls) - also used by tests' AsyncClient, so it covers both.
+    "httpx>=0.28.0",
 ]
 
 [dependency-groups]
@@ -31,7 +40,6 @@ dev = [
     "ruff>=0.8.0",      # linter + formatter
     "pytest>=8.3.0",
     "pytest-asyncio>=0.24.0",
-    "httpx>=0.27.0",    # used by FastAPI's TestClient for async endpoints
 ]
 
 [tool.ruff]

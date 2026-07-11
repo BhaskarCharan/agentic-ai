@@ -197,6 +197,50 @@ both `db.delete_session()` (removes the `sessions` doc) and
    worked) - this only changes *when and where* the generator's cleanup
    happens, since where it happens is what a tracer attributes it to.
 
+   **Follow-up, after implementing the weather agent (Phase 0 of
+   `MULTI_AGENT_ROADMAP.md`):** confirmed by reading LangGraph's actual
+   `Pregel.astream()` source (`pregel/main.py`) that the `yield o` this
+   traceback points at sits inside an `async with AsyncPregelLoop(...)`
+   block wrapping the whole node execution - so **every** early close of
+   the stream throws `GeneratorExit` through that scope, whether it's our
+   explicit, immediate `aclose()` (the fix above) or a delayed GC one. This
+   means the fix above does NOT make the LangSmith trace stop showing
+   `GeneratorExit` - it only prevents the close from being orphaned onto an
+   unrelated later context. **Every turn where the graph pauses on an
+   `interrupt()` will show this in LangSmith, by design, and that's not
+   fixable from our side** (LangSmith's tracing appears to flag any
+   propagated `GeneratorExit` as a run error regardless of how cleanly it
+   was closed). Confirmed live: a compound question with N tool calls in
+   one `AIMessage` needs N sequential interrupt-approve round trips before
+   finishing (the code deliberately loops `interrupt()` once per call in
+   `tools_node`) - each of those N pauses shows a `GeneratorExit` in
+   LangSmith, and only the final `/resume` that reaches `END` naturally
+   traces clean. **This is expected, not a bug** - don't re-investigate it
+   as one. The actual improvable thing here is UX, not tracing: one
+   compound message currently needs multiple manual approve-clicks. Decided
+   to leave that as-is rather than batch multiple pending tool calls into
+   one `interrupt()` now - Phase 4's selective interrupts (only sensitive/
+   write actions pause; reads like weather run silently) will shrink this
+   naturally once most calls in a turn don't interrupt at all. Revisit the
+   batching idea only if Phase 4 turns out not to be enough.
+7. **`tools_node` would have raised `NotImplementedError: StructuredTool
+   does not support sync invocation` the moment the supervisor actually
+   called `weather_agent_tool`.** Caught while building Phase 0 of
+   `MULTI_AGENT_ROADMAP.md`, before it ever hit a real request. Cause:
+   `tools_node` executed every tool with the synchronous `tool.invoke(...)`;
+   that's fine for `multiply` (a plain `def`), but `weather_agent_tool` (see
+   `agent/supervisor_tools.py`) is `async def` - LangChain only allows
+   calling an async-only tool via `.ainvoke()`, confirmed live with a
+   throwaway `@tool async def` before touching the real code. Fixed by
+   making `tools_node` itself `async def` and switching to `await
+   tool.ainvoke(call["args"])` unconditionally - `.ainvoke()` also works
+   for sync tools (runs them in a thread executor), so there's no need to
+   branch on the tool's type. Any future specialist-agent wrapper tool
+   (Gmail, LinkedIn, ...) will be `async def` for the same reason
+   `weather_agent_tool` is (delegating to `some_agent.ainvoke(...)`), so
+   this fix isn't weather-specific - it's load-bearing for the whole
+   supervisor pattern from here on.
+
 ## Security note
 
 An API key was pasted directly into chat once during development. It was
