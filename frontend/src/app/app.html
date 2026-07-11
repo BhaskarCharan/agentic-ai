@@ -1,0 +1,61 @@
+<div class="layout">
+  <aside class="sidebar">
+    <button class="new-chat-btn" (click)="startNewChat()">+ New chat</button>
+    <ul class="session-list">
+      @for (session of sessions(); track session.id) {
+        <li
+          class="session-item"
+          [class.active]="session.id === chat.currentThreadId()"
+          (click)="selectSession(session)"
+        >
+          <span class="session-title">{{ session.title }}</span>
+          <button class="delete-btn" (click)="deleteSession(session, $event)" title="Delete">&times;</button>
+        </li>
+      }
+    </ul>
+  </aside>
+
+  <main class="chat-panel">
+    <div class="messages">
+      @for (message of chat.messages(); track $index) {
+        <div class="message" [class.human]="message.role === 'human'" [class.ai]="message.role === 'ai'">
+          <div class="bubble">{{ message.content }}</div>
+        </div>
+      }
+
+      @if (chat.isThinking()) {
+        <div class="message ai">
+          <div class="bubble thinking">
+            <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+          </div>
+        </div>
+      }
+
+      @if (chat.pendingInterrupt(); as pending) {
+        <div class="interrupt-banner">
+          <p>
+            The agent wants to call <strong>{{ pending.tool_name }}</strong>
+            with args <code>{{ pending.tool_args | json }}</code>. Proceed?
+          </p>
+          <div class="interrupt-actions">
+            <button (click)="approveToolCall()">Approve</button>
+            <button (click)="declineToolCall()">Decline</button>
+          </div>
+        </div>
+      }
+    </div>
+
+    <form class="composer" (submit)="$event.preventDefault(); send()">
+      <input
+        type="text"
+        [(ngModel)]="draft"
+        name="draft"
+        placeholder="Ask me to multiply two numbers..."
+        [disabled]="chat.isStreaming() || !!chat.pendingInterrupt()"
+      />
+      <button type="submit" [disabled]="chat.isStreaming() || !!chat.pendingInterrupt() || !draft.trim()">
+        Send
+      </button>
+    </form>
+  </main>
+</div>

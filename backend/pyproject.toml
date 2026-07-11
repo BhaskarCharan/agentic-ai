@@ -1,0 +1,55 @@
+[project]
+name = "agentic-ai-backend"
+version = "0.1.0"
+description = "FastAPI + LangGraph agent backend with a multiply tool, MongoDB checkpointing, and SSE streaming."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    # --- Web framework ---
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    # --- Agent framework: builds the tool-calling graph, gives us
+    # checkpointing (persisted history) and interrupt/resume (human-in-the-loop) for free.
+    "langgraph>=0.2.60",
+    # --- Persists LangGraph checkpoints (conversation state) straight into MongoDB.
+    "langgraph-checkpoint-mongodb>=0.1.0",
+    # --- LLM adapter: wraps the Gemini API behind LangChain's chat-model
+    # interface so LangGraph can bind tools to it and stream tokens.
+    "langchain-google-genai>=2.0.0",
+    # --- Async MongoDB driver, used for our own "sessions" metadata collection.
+    "motor>=3.6.0",
+    # --- Typed settings loaded from environment variables / .env file.
+    "pydantic-settings>=2.6.0",
+]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.8.0",      # linter + formatter
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+    "httpx>=0.27.0",    # used by FastAPI's TestClient for async endpoints
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+# Our Motor/pymongo clients are module-level singletons created once at
+# import time and bound to the first event loop they see - a fresh loop per
+# test (pytest-asyncio's default) breaks them on the second test. Sharing
+# one loop for the whole session keeps them usable across all tests.
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+testpaths = ["tests"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/app"]
