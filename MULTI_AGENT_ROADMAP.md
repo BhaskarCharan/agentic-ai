@@ -471,73 +471,99 @@ the one file that needs to change.
 
 ## 5. Phase 2 - Gmail agent
 
-**Goal:** *"read my latest mail and summarize it"* works end to end.
+**Status: done**, built together with Phase 3 (LinkedIn) since the pattern
+turned out identical. Used **Option A** (Composio's Python SDK tool
+objects via `composio-langchain`'s `LangchainProvider`) - verified live
+that `client.tools.get(user_id=..., tools=[...])` returns real, ready-to-
+bind `langchain_core.tools.BaseTool` objects with rich schemas before
+committing to this approach.
 
-### Two ways to get Gmail tools - pick one, verify current docs before committing
+### Two corrections/decisions made while building this
 
-**Option A - Composio's Python SDK tool objects** (what `composio-langchain`
-is for): fetch ready-to-bind `BaseTool` objects for the Gmail toolkit,
-scoped to `settings.composio_user_id`, and bind them into a
-`create_agent()` the same way `weather_agent.py` does. This keeps
-everything in the same SDK you're already using for connection management
-in Phase 1.
+1. **Deliberately read-only tool scope, not "all Gmail/LinkedIn actions."**
+   Gmail exposes 63 actions on Composio, LinkedIn 22 - many destructive
+   (`GMAIL_DELETE_MESSAGE`, `GMAIL_BATCH_DELETE_MESSAGES`) or externally-
+   visible writes (`GMAIL_SEND_EMAIL`, `LINKEDIN_CREATE_LINKED_IN_POST`,
+   `LINKEDIN_DELETE_POST`). The supervisor's own `tools_node` pauses on
+   every call via `interrupt()`, but that gate does **not** extend to a
+   specialist's *internal* tool calls - `create_agent()` runs its bound
+   tools immediately, no approval. Binding a send/delete/post action to a
+   specialist right now would let the model act on the real account with
+   zero human approval. `agent/gmail_tools.py` and `agent/linkedin_tools.py`
+   both hard-code a small read-only allowlist (fetch/list/get actions
+   only) rather than pulling the full toolkit - widen this only once Phase
+   4 gives specialist sub-agents their own approval gate for sensitive
+   actions.
+2. **A new shared `app/composio_client.py` module**, not more code in
+   `services/integration_service.py`. Composio's `provider` (what shape
+   `tools.get()` returns - plain dicts vs. LangChain `BaseTool` objects) is
+   fixed at client construction, so Phase 1's connection-management client
+   (default provider) and Phase 2/3's tool-fetching client
+   (`LangchainProvider()`) genuinely need to be two separate `Composio`
+   instances. Both live in one small shared module, same "one place owns
+   client construction" convention as `db.py` for Motor.
 
-**Option B - Composio's hosted MCP endpoint per toolkit**, consumed via
-`langchain-mcp-adapters`: Composio exposes each toolkit as its own MCP
-server; instead of the `composio`/`composio-langchain` SDK calls, your agent
-connects to that MCP endpoint and gets the same tools via the Model Context
-Protocol instead. This is worth knowing about mainly because it's the same
-mechanism you'd use for Section 8's MCP question, just in the *client*
-direction (consuming an MCP server) rather than the *server* direction
-(exposing one) - seeing both directions is useful for the learning goal, but
-don't feel obligated to use it here if Option A is simpler to wire up.
+### Critical bug found and fixed: a disconnected/expired account crashed the ENTIRE turn
 
-Recommendation: **start with Option A** (consistent with Phase 1's SDK
-usage), keep Option B in your back pocket once Section 8's MCP work is
-underway and the concept is familiar from the consumer side too.
+Verified live (using the two connections that had just expired - see
+below): calling a Gmail/LinkedIn tool with no active connection raises a
+raw `composio_client.BadRequestError` from deep inside the specialist's own
+tool execution. This is **not** absorbed by `create_agent()`'s default
+error handling - it propagates all the way up through `tools_node`'s
+`interrupt()`-based flow and kills the whole supervisor turn, not just the
+one delegated call. Fixed by wrapping `gmail_agent_tool`/
+`linkedin_agent_tool` (in `supervisor_tools.py`) in a broad `try/except`
+around the specialist's `ainvoke()` call, returning an actionable message
+("check the Connected accounts panel and reconnect") instead of letting the
+exception escape. This is a deliberate, documented exception to "don't
+catch broadly" - there's no way to enumerate every failure mode a
+third-party API can produce, and the alternative (the whole conversation
+dying) is worse than an imprecise-but-safe fallback message. Verified live,
+end to end through a real interrupt-approve-resume cycle, for both Gmail
+and LinkedIn - see `DEVELOPMENT_LOG.md` bug entry for the full transcript.
 
-### New/changed files (mirrors Phase 0's shape exactly)
+**Related, non-bug finding**: Composio access tokens expire in about an
+hour (`expires_in: 3599` seen live) and `connected_accounts.refresh()`
+turned out to require a fresh consent redirect, not a silent background
+refresh - i.e. **there is no silent token refresh today**, a connection
+just moves to `EXPIRED` and needs reconnecting via the same "Connect" flow
+as Phase 1. This is exactly the scenario the error-handling fix above makes
+safe rather than crash-prone.
+
+### Files (Phase 2 + 3 together, same shape)
 
 ```
-backend/src/app/agent/
-  gmail_tools.py     - NEW: Composio-provided Gmail tools (read/search/summarize-relevant ones)
-  gmail_agent.py      - NEW: create_agent() bound to gmail_tools
-  supervisor_tools.py  - CHANGED: add gmail_agent_tool, same wrapper shape as weather_agent_tool
-  graph.py               - CHANGED: bind gmail_agent_tool alongside the others
+backend/src/app/
+  composio_client.py                   - NEW: shared Composio client construction (default + LangChain providers)
+  agent/gmail_tools.py                  - NEW: fixed read-only Gmail tool allowlist, fetched from Composio
+  agent/gmail_agent.py                   - NEW: lazily-built create_agent() over gmail_tools (@lru_cache, not module-level - fetching tools is a live API call)
+  agent/linkedin_tools.py                 - NEW: same shape, LinkedIn read-only allowlist
+  agent/linkedin_agent.py                  - NEW: same shape
+  agent/supervisor_tools.py                 - CHANGED: gmail_agent_tool, linkedin_agent_tool, both with broad error handling around the sub-agent call
+  agent/graph.py                              - CHANGED: bind both new tools, system prompt mentions both
+  services/integration_service.py               - CHANGED: imports get_composio_client from composio_client.py instead of defining it
+  api/dependencies.py                             - CHANGED: same import fix
 ```
 
-### Acceptance criteria for Phase 2
+### Acceptance criteria - verified live (schema-fetch and graph-wiring; tool *execution* pending your reconnect)
 
-- With Gmail connected (Phase 1), asking *"read my latest email and
-  summarize it"* returns an accurate summary of a real message in the
-  connected inbox.
-- The compound-question case from Phase 0's acceptance criteria still works
-  with Gmail added to the mix (e.g. mail summary + weather in one message).
+- `get_gmail_agent()`/`get_linkedin_agent()` build successfully against the
+  real Composio account (real tool schemas fetched) - verified live.
+- Importing `agent.graph` (and by extension running `make test`) does
+  **not** require `COMPOSIO_API_KEY` at all - verified live with only
+  `GOOGLE_API_KEY` set, proving the lazy `@lru_cache` construction actually
+  defers the Composio network call.
+- A Gmail question while disconnected produces one graceful final answer
+  telling the user to reconnect, not a crash - verified live through a full
+  interrupt-approve-resume cycle. Same for LinkedIn.
+- **Not yet verified**: an actual successful "read my latest email and
+  summarize it" against a real, active connection - your Gmail/LinkedIn
+  connections expired mid-session while building this. Reconnect via the
+  sidebar and try a real question to confirm this last piece.
 
 ---
 
-## 6. Phase 3 - LinkedIn agent
-
-Same shape as Phase 2, second toolkit. By this point the pattern
-(Composio-connected toolkit -> `create_agent()` -> wrapper tool -> add
-to supervisor's tool list) should be close to copy-paste, which is the
-payoff of doing Gmail first.
-
-```
-backend/src/app/agent/
-  linkedin_tools.py
-  linkedin_agent.py
-  supervisor_tools.py   - CHANGED: add linkedin_agent_tool
-  graph.py                 - CHANGED: bind linkedin_agent_tool
-```
-
-**Acceptance criteria:** a LinkedIn-only question works, and a
-three-way compound question (mail + weather + LinkedIn, all in one message)
-still produces one coherent final answer.
-
----
-
-## 7. Phase 4 - Compound-question polish + selective interrupts
+## 6. Phase 4 - Compound-question polish + selective interrupts
 
 Now that all three specialists exist, revisit the two things deliberately
 deferred earlier.
@@ -586,7 +612,7 @@ exist and turns can have 3 pending calls instead of 2.
 
 ---
 
-## 8. Optional stretch add-ons (not phased, pick up anytime after Phase 4)
+## 7. Optional stretch add-ons (not phased, pick up anytime after Phase 4)
 
 - **A connectors registry.** Right now each new integration means editing
   `graph.py`'s tool list by hand. A small config mapping toolkit name ->
@@ -606,7 +632,7 @@ exist and turns can have 3 pending calls instead of 2.
 
 ---
 
-## 9. "If I want this as an MCP server, is it easy to do?"
+## 8. "If I want this as an MCP server, is it easy to do?"
 
 Depends which of two things you mean - genuinely different amounts of work:
 
@@ -666,13 +692,12 @@ this project, for exactly this kind of "add a second interface" situation.
 
 ---
 
-## 10. Suggested order to actually execute this
+## 9. Suggested order to actually execute this
 
 1. Phase 0 (weather) - lowest risk, validates the architecture.
 2. Phase 1 (Composio linking + consent UI) - unblocks Phases 2 and 3;
    nothing about Gmail/LinkedIn agents can be tested without it.
-3. Phase 2 (Gmail), then Phase 3 (LinkedIn) - same pattern twice, second one
-   should be fast.
+3. Phase 2 (Gmail) and Phase 3 (LinkedIn) - done together, same pattern.
 4. Phase 4 (polish: selective interrupts, prompt tuning, trace naming).
-5. Section 8 add-ons and the MCP question, opportunistically, once the core
-   multi-agent flow is solid.
+5. Section 7's stretch add-ons and Section 8's MCP question,
+   opportunistically, once the core multi-agent flow is solid.

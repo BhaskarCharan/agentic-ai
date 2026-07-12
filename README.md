@@ -101,7 +101,9 @@ Off by default, so a fresh clone never sends data anywhere until you opt in.
 
 Ask the chat something like *"what's the weather in Hyderabad?"* and it's
 handled by a weather specialist agent - no setup needed. Gmail/LinkedIn
-questions need those accounts linked first:
+questions (e.g. *"read my latest email and summarize it"*, *"what's my
+LinkedIn headline?"*) need those accounts linked first - both specialists
+are read-only (they can't send, post, or delete anything):
 
 1. Sign up at https://app.composio.dev and grab an API key.
 2. In `backend/.env`, set:
@@ -116,9 +118,11 @@ questions need those accounts linked first:
    toolkit.
 4. Click "Connect," complete the real OAuth consent screen (opens in a new
    tab), then click the ↻ refresh button back in the app to see "Connected."
+5. Composio access tokens expire after about an hour - if a question comes
+   back saying it couldn't reach Gmail/LinkedIn, click "Disconnect" then
+   "Connect" again (there's no silent background refresh today).
 
-See `MULTI_AGENT_ROADMAP.md` for the full plan (Gmail/LinkedIn specialist
-agents are Phase 2/3, not built yet as of this writing).
+See `MULTI_AGENT_ROADMAP.md` for the full plan and phase status.
 
 ## Troubleshooting
 

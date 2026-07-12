@@ -34,11 +34,15 @@ dependencies = [
     # calls) - also used by tests' AsyncClient, so it covers both.
     "httpx>=0.28.0",
     # --- Composio SDK: manages OAuth connections to Gmail/LinkedIn (consent
-    # flow, connection status) and will supply their tool objects from
-    # Phase 2 onward. Only `services/integration_service.py` imports this
-    # directly - same "one file owns the third-party client" convention as
-    # `agent/llm.py` for Gemini.
+    # flow, connection status). Client construction lives in
+    # `app/composio_client.py` - same "one file owns the third-party client"
+    # convention as `agent/llm.py` for Gemini.
     "composio>=0.17.0",
+    # --- Composio's LangChain provider: makes `tools.get(...)` return
+    # ready-to-bind `BaseTool` objects instead of plain dict schemas - used
+    # by the Gmail/LinkedIn specialist agents (agent/gmail_tools.py,
+    # agent/linkedin_tools.py).
+    "composio-langchain>=0.17.1",
 ]
 
 [dependency-groups]

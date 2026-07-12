@@ -15,11 +15,12 @@ from fastapi import Depends, Request
 from langgraph.graph.state import CompiledStateGraph
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
+from app.composio_client import get_composio_client
 from app.config import settings
 from app.db import get_database
 from app.repositories.session_repository import SessionRepository
 from app.services.agent_service import AgentService
-from app.services.integration_service import IntegrationService, get_composio_client
+from app.services.integration_service import IntegrationService
 from app.services.session_service import SessionService
 
 

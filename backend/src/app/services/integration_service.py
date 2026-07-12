@@ -2,25 +2,23 @@
 Composio - the Service layer for account linking (Phase 1 of
 `MULTI_AGENT_ROADMAP.md`).
 
-This is the one file that imports the `composio` SDK directly - same
-"one file owns the third-party client" convention as `agent/llm.py` for
-Gemini or `db.py` for Motor. The Composio Python SDK is synchronous
-throughout (confirmed live against a real Composio account while building
-this: `connected_accounts.link`, `auth_configs.list`/`create` are all
-blocking HTTP calls, not async) - every call here goes through
-`asyncio.to_thread` so it doesn't block the event loop other requests are
-running on.
+The Composio SDK client itself lives in `app/composio_client.py` (shared
+with the Gmail/LinkedIn specialist agents in Phase 2/3) - this file owns
+everything about *using* it for connection management: auto-provisioning
+auth configs, initiating/listing/revoking connections. The Composio Python
+SDK is synchronous throughout (confirmed live against a real Composio
+account while building this: `connected_accounts.link`,
+`auth_configs.list`/`create` are all blocking HTTP calls, not async) -
+every call here goes through `asyncio.to_thread` so it doesn't block the
+event loop other requests are running on.
 """
 
 import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass
-from functools import lru_cache
 from typing import Any
 
 from composio import Composio
-
-from app.config import settings
 
 # Toolkits this app knows how to link. The Gmail/LinkedIn specialist agents
 # (Phase 2/3) will only work once their entry here has an ACTIVE connected
@@ -41,18 +39,6 @@ _IDENTITY_TOOLS: dict[str, tuple[str, Callable[[dict[str, Any]], str | None]]] =
         ),
     ),
 }
-
-
-@lru_cache
-def get_composio_client() -> Composio:
-    """Lazily constructed, cached for the process lifetime - same pattern as
-    `config.get_settings()`. Deferred rather than built at import time
-    because `Composio(api_key=...)` raises immediately if no key is
-    configured (confirmed live), and the test suite never configures one -
-    it never hits an integrations route, so it must never be forced to
-    construct this client just by importing this module.
-    """
-    return Composio(api_key=settings.composio_api_key)
 
 
 @dataclass

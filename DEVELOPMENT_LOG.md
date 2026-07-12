@@ -32,14 +32,18 @@ backend/
     agent/llm.py          - swappable LLM factory
     agent/messages.py    - extract_text() - handles provider content-format quirks
     agent/weather_tools.py, weather_agent.py - the weather specialist (Phase 0)
-    agent/supervisor_tools.py - wraps specialist agents as tools the supervisor can call
+    agent/gmail_tools.py, gmail_agent.py       - the Gmail specialist, read-only tool allowlist (Phase 2)
+    agent/linkedin_tools.py, linkedin_agent.py  - the LinkedIn specialist, same shape (Phase 3)
+    agent/supervisor_tools.py - wraps specialist agents as tools the supervisor can call;
+                                 also where Gmail/LinkedIn's disconnected-account error handling lives
+    composio_client.py      - shared Composio client construction (default + LangChain providers)
     api/chat.py           - controller: SSE endpoints (/chat, /resume), formats SSE only
     api/sessions.py       - controller: session CRUD, history
-    api/integrations.py    - controller: Gmail/LinkedIn account-link status + connect (Phase 1)
+    api/integrations.py    - controller: Gmail/LinkedIn account-link status + connect/disconnect (Phase 1)
     api/dependencies.py    - FastAPI Depends() wiring: database -> repository -> service
     services/session_service.py       - business rules (default title, rename-once, ...)
     services/agent_service.py          - all graph interaction (astream, interrupt/resume, aget_state, adelete_thread) - controllers never touch `graph` directly
-    services/integration_service.py     - owns the Composio SDK entirely (Phase 1)
+    services/integration_service.py     - connection management (link/status/disconnect) - client construction moved to composio_client.py
     repositories/session_repository.py - raw Mongo CRUD for the `sessions` collection
     models/session.py                   - SessionDocument (ours)
     models/checkpoint.py                 - CheckpointDocument/CheckpointWriteDocument (reference only)
@@ -304,6 +308,30 @@ both `db.delete_session()` (removes the `sessions` doc) and
    `weather_agent_tool` is (delegating to `some_agent.ainvoke(...)`), so
    this fix isn't weather-specific - it's load-bearing for the whole
    supervisor pattern from here on.
+8. **A disconnected/expired Gmail or LinkedIn connection crashed the
+   entire supervisor turn**, not just the one delegated question. Found
+   live while building Phase 2/3 (`MULTI_AGENT_ROADMAP.md`): the two test
+   connections used throughout Phase 1/2 building expired mid-session
+   (Composio access tokens last about an hour - `expires_in: 3599` seen
+   live - and `connected_accounts.refresh()` turned out to require a fresh
+   consent redirect, not a silent token refresh, so there's no silent
+   recovery today). Asking "read my latest email" with an expired
+   connection raised `composio_client.BadRequestError` from deep inside
+   `create_agent()`'s internal tool execution - and critically, this was
+   **not** caught by any of LangGraph's/LangChain's own error handling; it
+   propagated all the way up through `tools_node`'s `interrupt()`-based
+   flow and killed the whole graph invocation, confirmed by driving the
+   graph directly (bypassing the API) through a real interrupt-approve-
+   resume cycle and watching it crash before the fix, then succeed with a
+   graceful message after. Fixed with a broad `try/except Exception`
+   around each specialist's `ainvoke()` call in
+   `agent/supervisor_tools.py`'s `gmail_agent_tool`/`linkedin_agent_tool`,
+   returning an actionable message ("check the Connected accounts panel
+   and reconnect") instead of letting the exception escape - a deliberate,
+   documented exception to "don't catch broadly," since there's no way to
+   enumerate every failure mode a third-party API can produce and the
+   alternative is the entire conversation dying. Verified live, end to
+   end, for both Gmail and LinkedIn after the fix.
 
 ## Security note
 

@@ -67,11 +67,13 @@ _llm_with_tools = get_llm().bind_tools(ALL_TOOLS)
 # than part of the conversation.
 _SYSTEM_PROMPT = SystemMessage(
     content=(
-        "You are a helpful assistant with access to a `multiply` tool and a "
-        "weather lookup tool. After a tool call returns a result, always "
-        "reply with a complete, friendly sentence stating the answer in "
-        "context - never reply with just the bare number or raw data on its "
-        "own."
+        "You are a helpful assistant with access to a `multiply` tool, a "
+        "weather lookup tool, and specialist agents for Gmail (reading/"
+        "searching email) and LinkedIn (profile/company lookups) - both "
+        "read-only, they cannot send, post, or delete anything. After a "
+        "tool call returns a result, always reply with a complete, friendly "
+        "sentence stating the answer in context - never reply with just the "
+        "bare number or raw data on its own."
     )
 )
 
