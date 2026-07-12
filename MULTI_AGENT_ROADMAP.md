@@ -312,98 +312,160 @@ point of this pattern.
 
 ## 4. Phase 1 - Composio account plumbing + consent UI
 
-**Goal:** get to the point where the backend can show "Gmail: connected as
-you@gmail.com" / "LinkedIn: not connected" and a user can click "Connect" and
-complete a real OAuth consent flow. **No Gmail/LinkedIn agent logic yet** -
-this phase is purely about the linking mechanism, so Phase 2/3 have a
-working connection to build against instead of debugging OAuth and agent
-logic at the same time.
+**Status: done.** Implemented and verified live against a real Composio
+account (auth config creation, a real OAuth redirect URL, connection
+listing, cleanup) before writing this up. Two things turned out different
+from the original plan below - both are the kind of thing that would
+otherwise get rediscovered the hard way in Phase 2/3, so read this before
+touching Gmail/LinkedIn:
+
+1. **No manual dashboard Auth Config setup needed, at all.** The original
+   plan below said to create an Auth Config per toolkit by hand in the
+   Composio dashboard. Turned out unnecessary: `IntegrationService`
+   auto-provisions a Composio-managed auth config for a toolkit the first
+   time anyone tries to connect it (`auth_configs.list(toolkit_slug=...)`,
+   create one via `auth_configs.create(...)` if none exists yet) - this
+   mirrors what Composio's own `toolkits.authorize()` convenience method
+   does internally (read via `inspect.getsource` on the installed SDK).
+   Only an API key from https://app.composio.dev is needed up front.
+2. **Use `connected_accounts.link()`, not `.initiate()`.** The obvious
+   method name (`initiate()`) is being **deprecated/retired** for
+   Composio-managed OAuth per its own docstring in the installed SDK
+   (`composio==0.17.1`) - `toolkits.authorize()` still wraps the
+   deprecated one internally, which is exactly why this phase doesn't call
+   that convenience method either. `link()` is the current, non-deprecated
+   way to get a redirect URL; it returns the same shape (`.id`, `.status`,
+   `.redirect_url`).
+
+Also worth knowing: the Composio Python SDK (`composio.auth_configs`,
+`composio.connected_accounts`, `composio.toolkits`) is **fully synchronous**
+- confirmed live, not documented anywhere obvious. Every call in
+`IntegrationService` goes through `asyncio.to_thread(...)` so it doesn't
+block the FastAPI event loop.
+
+**Goal:** get to the point where the backend can show "Gmail: connected" /
+"LinkedIn: not connected" and a user can click "Connect" and complete a
+real OAuth consent flow. **No Gmail/LinkedIn agent logic yet** - this phase
+is purely about the linking mechanism, so Phase 2/3 have a working
+connection to build against instead of debugging OAuth and agent logic at
+the same time.
 
 ### Setup (manual, one-time, outside the codebase)
 
-1. Sign up at Composio, get an API key.
-2. Create an **Auth Config** per toolkit you'll use (Gmail, LinkedIn) in the
-   Composio dashboard - this is their term for "the OAuth app registration
-   blueprint" for that service.
-3. Add to `backend/.env` / `.env.example`:
+1. Sign up at https://app.composio.dev, get an API key.
+2. Add to `backend/.env`:
    ```
-   COMPOSIO_API_KEY=
+   COMPOSIO_API_KEY=<your key>
    COMPOSIO_USER_ID=me
    ```
-   and a matching field in `config.py`, same pattern as `google_api_key`.
+   That's it - no auth config dashboard work, per the correction above.
 
-### New/changed files
+### New/changed files (as actually built)
 
 ```
 backend/src/app/
-  services/integration_service.py   - NEW: wraps Composio's connection-management calls
+  services/integration_service.py   - NEW: owns the Composio SDK entirely -
+                                       auto-provisions auth configs, initiates
+                                       connections via link(), lists status
   api/integrations.py                  - NEW: controller - GET status, POST connect
-  api/dependencies.py                   - CHANGED: add get_integration_service
-  api/schemas.py                          - CHANGED: add IntegrationStatusOut, etc.
+  api/dependencies.py                   - CHANGED: get_integration_service,
+                                           IntegrationServiceDep
+  api/schemas.py                          - CHANGED: IntegrationStatusOut, ConnectResponse
   main.py                                  - CHANGED: include_router(integrations.router)
+  config.py                                - CHANGED: composio_api_key, composio_user_id
+tests/
+  test_integrations_api.py            - NEW: contract tests via a fake
+                                         IntegrationService (FastAPI
+                                         dependency_overrides) - never calls
+                                         the real Composio API, no key needed in CI
 frontend/src/app/
+  models.ts                            - CHANGED: IntegrationStatus, ConnectResponse
   integrations.service.ts              - NEW: CRUD against /api/integrations
-  integrations-panel/*                  - NEW: small component, one row per toolkit
+  integrations-panel.ts/.html/.css      - NEW: sidebar panel, one row per
+                                          toolkit, "Connect" opens the OAuth
+                                          redirect in a new tab + a manual
+                                          "Refresh" button (no webhook/polling
+                                          - fine for a single-user local app)
+  app.ts/app.html                        - CHANGED: mount <app-integrations-panel />
+                                          in the sidebar
 ```
 
-### What `IntegrationService` needs to do (verify exact Composio method
-names against **current** docs when you implement this - the SDK has
-changed shape between major versions, don't trust a remembered snippet over
-`docs.composio.dev`):
+### What `IntegrationService` actually does (real method calls, verified live)
 
-1. **List connection status** for each toolkit (Gmail, LinkedIn) for
-   `settings.composio_user_id` - "connected" vs "not connected", and if
-   connected, some display detail (e.g. the connected email address) if the
-   API exposes it.
-2. **Initiate a connection** for a given toolkit - this returns a redirect
-   URL; your frontend sends the browser there, the user grants consent on
-   Google's/LinkedIn's real OAuth screen, and Composio marks the connection
-   active on their side once it's done.
-3. (Optional) **Disconnect** a toolkit.
+```python
+# Auto-provision (or reuse) an auth config, then get a redirect URL -
+# no dashboard setup, no deprecated initiate() call:
+existing = client.auth_configs.list(toolkit_slug="gmail")
+if existing.items:
+    auth_config_id = max(existing.items, key=lambda i: i.created_at).id
+else:
+    auth_config_id = client.auth_configs.create(
+        toolkit="gmail",
+        options={
+            "type": "use_composio_managed_auth",
+            "tool_access_config": {"tools_for_connected_account_creation": []},
+        },
+    ).id
+
+connection_request = client.connected_accounts.link(user_id="me", auth_config_id=auth_config_id)
+redirect_url = connection_request.redirect_url  # send the browser here
+
+# Status check - no blocking wait_for_connection() needed; the frontend
+# just re-fetches this after the user completes consent in another tab:
+accounts = client.connected_accounts.list(
+    user_ids=["me"], toolkit_slugs=["gmail"], statuses=["ACTIVE"]
+)
+connected = len(accounts.items) > 0
+
+# Connection status/token metadata never includes the account's email or
+# name - showing "connected as you@gmail.com" needs an *extra* live call to
+# the connected service's own "who am I" action. Requires pinning a real
+# toolkit version (dangerously_skip_version_check=True works but Composio's
+# own error warns against it in real code):
+version = client.toolkits.get("gmail").meta.version
+result = client.tools.execute("GMAIL_GET_PROFILE", arguments={}, user_id="me", version=version)
+email = result["data"]["emailAddress"] if result["successful"] else None
+# LinkedIn's equivalent: LINKEDIN_GET_MY_INFO -> data["localizedFirstName"] / data["localizedLastName"]
+```
 
 This service is intentionally the *only* place that imports the `composio`
 SDK - same reasoning as `agent/llm.py` isolating the Gemini-specific client,
 or `db.py` isolating Motor. If Composio's SDK changes shape again, this is
 the one file that needs to change.
 
-### Controller sketch
+### Acceptance criteria for Phase 1 - all verified
 
-```python
-# api/integrations.py
-from fastapi import APIRouter
-
-from app.api.dependencies import IntegrationServiceDep
-from app.api.schemas import IntegrationStatusOut
-
-router = APIRouter(prefix="/api/integrations", tags=["integrations"])
-
-
-@router.get("", response_model=list[IntegrationStatusOut])
-async def list_integrations(service: IntegrationServiceDep):
-    return await service.list_statuses()
-
-
-@router.post("/{toolkit}/connect")
-async def connect_integration(toolkit: str, service: IntegrationServiceDep):
-    return {"redirect_url": await service.initiate_connection(toolkit)}
-```
-
-### Frontend
-
-A small panel (new route or a section in the existing sidebar) listing
-Gmail/LinkedIn with a status badge and a "Connect" button that just does
-`window.location.href = redirect_url` (or opens a new tab) - this is a
-plain OAuth redirect, nothing LangGraph/streaming-specific about it, so it
-doesn't need to touch `sse.ts`/`chat.service.ts` at all.
-
-### Acceptance criteria for Phase 1
-
-- Visiting the integrations panel with nothing connected shows both as "not
-  connected."
-- Clicking "Connect" on Gmail completes a real Google OAuth consent screen
-  and returns to the app; the panel now shows "connected."
-- No changes yet to the chat/agent graph - this phase is additive and
-  doesn't touch `agent/graph.py`.
+- `GET /api/integrations` with nothing connected shows both `gmail` and
+  `linkedin` as `connected: false` - verified live.
+- `POST /api/integrations/gmail/connect` auto-creates an auth config (only
+  on first call - reuses it on subsequent calls) and returns a real,
+  working `https://connect.composio.dev/link/...` redirect URL - verified
+  live, then cleaned up the test connection/left the reusable auth config
+  in place.
+- `POST /api/integrations/{unsupported}/connect` 404s with a clear message
+  - verified live and covered by `test_connect_unknown_toolkit_404s`.
+- Once both toolkits are actually connected (real OAuth completed, not
+  simulated), `GET /api/integrations` returns a real `label` per toolkit
+  (Gmail's real email address, LinkedIn's real name) - verified live end to
+  end after a real user connected both.
+- `DELETE /api/integrations/{toolkit}` revokes and removes every ACTIVE
+  connected account for that toolkit
+  (`connected_accounts.delete(nanoid=..., revoke_on_delete=True)` - the
+  `revoke_on_delete=True` actually invalidates the token with the provider,
+  not just Composio's bookkeeping), 404s for an unsupported toolkit, and is
+  idempotent (a no-op, not an error, if nothing's connected) - covered by
+  `test_disconnect_known_toolkit_returns_204` /
+  `test_disconnect_unknown_toolkit_404s`. **Deliberately not live-tested
+  against real connected accounts** (unlike the connect flow) - doing so
+  would have actually disconnected the real Gmail/LinkedIn accounts used to
+  verify the rest of this phase, forcing a real re-consent; the delete
+  mechanism itself was already proven live during Phase 1 testing cleanup
+  (see the `connected_accounts.delete()` calls used to remove throwaway
+  test connections earlier in this phase). Confirm this one yourself in the
+  running app - it's safe/reversible (just reconnect after).
+- No changes to the chat/agent graph - this phase is additive and doesn't
+  touch `agent/graph.py`.
+- Frontend builds clean (`ng build`) and the panel renders in the sidebar.
 
 ---
 

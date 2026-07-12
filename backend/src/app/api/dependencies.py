@@ -10,13 +10,16 @@ you override `get_session_service` on the `app`, not monkeypatch an import.
 
 from typing import Annotated
 
+from composio import Composio
 from fastapi import Depends, Request
 from langgraph.graph.state import CompiledStateGraph
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
+from app.config import settings
 from app.db import get_database
 from app.repositories.session_repository import SessionRepository
 from app.services.agent_service import AgentService
+from app.services.integration_service import IntegrationService, get_composio_client
 from app.services.session_service import SessionService
 
 
@@ -46,5 +49,12 @@ def get_agent_service(
     return AgentService(graph)
 
 
+def get_integration_service(
+    client: Annotated[Composio, Depends(get_composio_client)],
+) -> IntegrationService:
+    return IntegrationService(client, settings.composio_user_id)
+
+
 SessionServiceDep = Annotated[SessionService, Depends(get_session_service)]
 AgentServiceDep = Annotated[AgentService, Depends(get_agent_service)]
+IntegrationServiceDep = Annotated[IntegrationService, Depends(get_integration_service)]

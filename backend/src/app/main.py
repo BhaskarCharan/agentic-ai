@@ -10,7 +10,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.agent.graph import build_graph
-from app.api import chat, sessions
+from app.api import chat, integrations, sessions
 from app.config import settings
 
 
@@ -35,6 +35,7 @@ app.add_middleware(
 
 app.include_router(sessions.router)
 app.include_router(chat.router)
+app.include_router(integrations.router)
 
 
 @app.get("/api/health")

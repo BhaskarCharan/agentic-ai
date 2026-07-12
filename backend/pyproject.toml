@@ -33,6 +33,12 @@ dependencies = [
     # --- Async HTTP client. Used at runtime by the weather tool (Open-Meteo
     # calls) - also used by tests' AsyncClient, so it covers both.
     "httpx>=0.28.0",
+    # --- Composio SDK: manages OAuth connections to Gmail/LinkedIn (consent
+    # flow, connection status) and will supply their tool objects from
+    # Phase 2 onward. Only `services/integration_service.py` imports this
+    # directly - same "one file owns the third-party client" convention as
+    # `agent/llm.py` for Gemini.
+    "composio>=0.17.0",
 ]
 
 [dependency-groups]

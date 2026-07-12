@@ -40,6 +40,15 @@ class Settings(BaseSettings):
     langsmith_project: str = "agentic-ai-chat"
     langsmith_endpoint: str = "https://api.smith.langchain.com"
 
+    # --- Composio (Gmail/LinkedIn account linking - MULTI_AGENT_ROADMAP.md
+    # Phase 1+) ---
+    # Defaults to "" rather than being required: this app has no real user
+    # auth (see DEVELOPMENT_LOG.md), so every Composio call uses one fixed
+    # identifier for the single person using this app locally, not a
+    # per-request authenticated user.
+    composio_api_key: str = ""
+    composio_user_id: str = "me"
+
     @property
     def cors_origins_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]

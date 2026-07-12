@@ -1,0 +1,41 @@
+<div class="integrations-panel">
+  <div class="integrations-header">
+    <span>Connected accounts</span>
+    <button class="refresh-btn" (click)="refresh()" title="Refresh status">&#8635;</button>
+  </div>
+  <ul class="integrations-list">
+    @for (status of statuses(); track status.toolkit) {
+      <li class="integration-row">
+        <div class="integration-top">
+          <span class="integration-name">{{ label(status.toolkit) }}</span>
+          @if (status.connected) {
+            <span class="integration-badge connected">Connected</span>
+          } @else {
+            <button
+              class="connect-btn"
+              [disabled]="connecting() === status.toolkit"
+              (click)="connect(status.toolkit)"
+            >
+              {{ connecting() === status.toolkit ? 'Opening...' : 'Connect' }}
+            </button>
+          }
+        </div>
+        @if (status.connected) {
+          <div class="integration-bottom">
+            <span class="integration-identity" [title]="status.label ?? ''">
+              {{ status.label ?? '' }}
+            </span>
+            <button
+              class="disconnect-btn"
+              [disabled]="disconnecting() === status.toolkit"
+              (click)="disconnect(status.toolkit)"
+              title="Disconnect"
+            >
+              {{ disconnecting() === status.toolkit ? '...' : 'Disconnect' }}
+            </button>
+          </div>
+        }
+      </li>
+    }
+  </ul>
+</div>

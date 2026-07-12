@@ -27,15 +27,19 @@ around a tool call, not the tool itself.
 ```
 backend/
   src/app/
-    agent/graph.py      - the LangGraph graph (agent <-> tools, interrupt, checkpointer)
+    agent/graph.py      - the LangGraph graph (supervisor <-> tools, interrupt, checkpointer)
     agent/tools.py       - the multiply tool
     agent/llm.py          - swappable LLM factory
     agent/messages.py    - extract_text() - handles provider content-format quirks
+    agent/weather_tools.py, weather_agent.py - the weather specialist (Phase 0)
+    agent/supervisor_tools.py - wraps specialist agents as tools the supervisor can call
     api/chat.py           - controller: SSE endpoints (/chat, /resume), formats SSE only
     api/sessions.py       - controller: session CRUD, history
+    api/integrations.py    - controller: Gmail/LinkedIn account-link status + connect (Phase 1)
     api/dependencies.py    - FastAPI Depends() wiring: database -> repository -> service
     services/session_service.py       - business rules (default title, rename-once, ...)
     services/agent_service.py          - all graph interaction (astream, interrupt/resume, aget_state, adelete_thread) - controllers never touch `graph` directly
+    services/integration_service.py     - owns the Composio SDK entirely (Phase 1)
     repositories/session_repository.py - raw Mongo CRUD for the `sessions` collection
     models/session.py                   - SessionDocument (ours)
     models/checkpoint.py                 - CheckpointDocument/CheckpointWriteDocument (reference only)
@@ -45,9 +49,12 @@ frontend/
   src/app/
     chat.service.ts       - owns chat state as signals, hand-parses the SSE stream
     api.service.ts         - plain CRUD for sessions
+    integrations.service.ts - plain CRUD for Gmail/LinkedIn account linking (Phase 1)
+    integrations-panel.ts/.html/.css - sidebar panel: connect/status per toolkit
     sse.ts                  - manual SSE parser (fetch-based, not EventSource)
     app.ts/.html/.css      - sidebar + chat panel, single-component UI
 DEVELOPMENT_LOG.md   - this file
+MULTI_AGENT_ROADMAP.md - phase-by-phase plan for weather/Gmail/LinkedIn multi-agent work
 README.md              - how to run it
 ```
 
@@ -127,6 +134,63 @@ README.md              - how to run it
   (`LANGSMITH_TRACING=false`) so a fresh clone never sends data anywhere
   until someone opts in. See README.md's "Optional: LangSmith tracing"
   section for the signup/setup steps.
+- **Why does `IntegrationService` auto-provision Composio auth configs
+  instead of expecting them pre-created in the dashboard, and why
+  `connected_accounts.link()` instead of the more obviously-named
+  `.initiate()`?** Both corrections to the original plan in
+  `MULTI_AGENT_ROADMAP.md`'s Phase 1, found by reading the installed
+  `composio==0.17.1` SDK's actual source/docstrings rather than trusting a
+  remembered API shape: (1) `composio.toolkits.authorize()` - the
+  convenience method that looks like the right one-liner - internally
+  calls `connected_accounts.initiate()`, which its own docstring says is
+  being retired for Composio-managed OAuth; using it would mean building
+  Phase 1 on a method already flagged for removal. (2) That same
+  convenience method also silently auto-creates an auth config if none
+  exists for a toolkit - so `IntegrationService._get_or_create_auth_config`
+  replicates that exact logic (`auth_configs.list` then `.create` on a
+  miss) but built on the non-deprecated `connected_accounts.link()`
+  instead, verified end-to-end against a real Composio account (real auth
+  config created, real working redirect URL returned) before this was
+  written up. (3) The whole Composio SDK used here is synchronous - every
+  call in `IntegrationService` goes through `asyncio.to_thread(...)` so it
+  doesn't block the FastAPI event loop, same reasoning as `MongoDBSaver`
+  needing a sync `pymongo.MongoClient` in `agent/graph.py`.
+- **Why doesn't the integrations panel show "connected as
+  you@gmail.com" from just the connection status check, and where is that
+  identity stored?** It isn't stored anywhere - there is no Mongo model for
+  integrations at all (unlike `sessions`, which is genuinely ours;
+  Composio's connection state lives entirely on Composio's own servers,
+  never touching this app's MongoDB). A connection's status/token metadata
+  (checked via `connected_accounts.list(...)`) only ever contains OAuth
+  token fields (access token, scope, expiry) - never the account's email or
+  name. Getting a display label requires an *additional* live call to the
+  connected service's own "who am I" action through Composio
+  (`GMAIL_GET_PROFILE` -> `data["emailAddress"]`, `LINKEDIN_GET_MY_INFO` ->
+  `data["localizedFirstName"/"localizedLastName"]` - both confirmed live
+  against real connected accounts), added as `IntegrationService._fetch_label`.
+  Deliberately fetched fresh on every `GET /api/integrations` rather than
+  cached in a new collection - chosen over adding an
+  `integration_connections` Mongo model to avoid the cache going stale if a
+  user disconnects on Composio's side directly; revisit only if the extra
+  live calls prove too slow in practice. Tool execution required pinning a
+  real toolkit version (`toolkits.get(toolkit).meta.version`) rather than
+  the tempting `dangerously_skip_version_check=True` shortcut, which
+  Composio's own error message warns against for real code.
+- **Why does `IntegrationService.disconnect()` pass
+  `revoke_on_delete=True`, and why wasn't it live-tested against a real
+  connected account the way `connect`/status-check were?** Composio's
+  `connected_accounts.delete()` defaults to *not* revoking the token with
+  the provider if you omit that flag - it would just stop Composio from
+  listing the connection while the underlying Google/LinkedIn token stays
+  valid, which isn't what a user clicking "Disconnect" expects. Passing
+  `revoke_on_delete=True` makes it a real revocation. This one genuinely
+  wasn't live-tested end-to-end here (unlike everything else in Phase 1) -
+  doing so would have disconnected the real Gmail/LinkedIn accounts just
+  connected to verify the rest of this phase, forcing a real OAuth
+  re-consent to fix. The underlying `connected_accounts.delete()` call was
+  already proven live during this phase's own test-connection cleanup, so
+  the mechanism is verified - just not through the app's actual API path.
+  Confirm this one directly in the running app.
 
 ## MongoDB collections
 

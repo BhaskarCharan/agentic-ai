@@ -97,6 +97,29 @@ See every LLM call, tool call, and graph step (including paused
 
 Off by default, so a fresh clone never sends data anywhere until you opt in.
 
+## Optional: linking Gmail/LinkedIn (multi-agent work, see MULTI_AGENT_ROADMAP.md)
+
+Ask the chat something like *"what's the weather in Hyderabad?"* and it's
+handled by a weather specialist agent - no setup needed. Gmail/LinkedIn
+questions need those accounts linked first:
+
+1. Sign up at https://app.composio.dev and grab an API key.
+2. In `backend/.env`, set:
+   ```
+   COMPOSIO_API_KEY=<your key>
+   COMPOSIO_USER_ID=me
+   ```
+   No dashboard OAuth-app setup needed - the backend auto-provisions
+   whatever it needs the first time you click "Connect."
+3. Restart the backend, open the app - a **Connected accounts** panel
+   appears at the bottom of the sidebar with a "Connect" button per
+   toolkit.
+4. Click "Connect," complete the real OAuth consent screen (opens in a new
+   tab), then click the ↻ refresh button back in the app to see "Connected."
+
+See `MULTI_AGENT_ROADMAP.md` for the full plan (Gmail/LinkedIn specialist
+agents are Phase 2/3, not built yet as of this writing).
+
 ## Troubleshooting
 
 - **`ng serve` complains about Node version**: run `nvm use 24` (or install

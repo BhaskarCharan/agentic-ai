@@ -5,11 +5,12 @@ import { firstValueFrom } from 'rxjs';
 
 import { ApiService } from './api.service';
 import { ChatService } from './chat.service';
+import { IntegrationsPanel } from './integrations-panel';
 import { ChatSession } from './models';
 
 @Component({
   selector: 'app-root',
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, IntegrationsPanel],
   templateUrl: './app.html',
   styleUrl: './app.css',
 })

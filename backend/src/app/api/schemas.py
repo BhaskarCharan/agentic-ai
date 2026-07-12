@@ -37,3 +37,17 @@ class MessageOut(BaseModel):
     # api/sessions.py:get_history and api/chat.py:_stream_graph.
     role: Literal["human", "ai"]
     content: str
+
+
+class IntegrationStatusOut(BaseModel):
+    toolkit: str
+    connected: bool
+    connected_since: str | None = None
+    # Human-readable identity (email for Gmail, name for LinkedIn) - best
+    # effort, may be None even when connected (see IntegrationService).
+    label: str | None = None
+
+
+class ConnectResponse(BaseModel):
+    # The frontend sends the user's browser here to complete OAuth consent.
+    redirect_url: str

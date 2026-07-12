@@ -22,3 +22,16 @@ export interface PendingInterrupt {
   tool_name: string;
   tool_args: Record<string, unknown>;
 }
+
+export interface IntegrationStatus {
+  toolkit: string;
+  connected: boolean;
+  connected_since: string | null;
+  // Human-readable identity (email for Gmail, name for LinkedIn) - best
+  // effort, may be null even when connected.
+  label: string | null;
+}
+
+export interface ConnectResponse {
+  redirect_url: string;
+}

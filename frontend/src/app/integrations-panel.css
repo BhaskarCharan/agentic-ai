@@ -1,0 +1,126 @@
+.integrations-panel {
+  border-top: 1px solid #ddd;
+  padding: 0.75rem;
+  font-size: 0.85rem;
+}
+
+.integrations-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: #666;
+  margin-bottom: 0.5rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  font-size: 0.7rem;
+  letter-spacing: 0.03em;
+}
+
+.refresh-btn {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 0.9rem;
+  color: #999;
+  line-height: 1;
+}
+
+.refresh-btn:hover {
+  color: #4f46e5;
+}
+
+.integrations-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.integration-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding-bottom: 0.4rem;
+}
+
+.integration-row:not(:last-child) {
+  border-bottom: 1px solid #eee;
+}
+
+.integration-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.integration-bottom {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.integration-name {
+  color: #333;
+}
+
+.integration-identity {
+  flex: 1;
+  min-width: 0;
+  color: #888;
+  font-size: 0.72rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.integration-badge.connected {
+  background: #dcfce7;
+  color: #16a34a;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.disconnect-btn {
+  padding: 0.2rem 0.5rem;
+  border: none;
+  background: transparent;
+  color: #999;
+  cursor: pointer;
+  font-size: 0.7rem;
+  text-decoration: underline;
+}
+
+.disconnect-btn:hover {
+  color: #dc2626;
+}
+
+.disconnect-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.connect-btn {
+  padding: 0.25rem 0.7rem;
+  border: 1px solid #4f46e5;
+  border-radius: 6px;
+  background: white;
+  color: #4f46e5;
+  cursor: pointer;
+  font-size: 0.75rem;
+}
+
+.connect-btn:hover {
+  background: #4f46e5;
+  color: white;
+}
+
+.connect-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
